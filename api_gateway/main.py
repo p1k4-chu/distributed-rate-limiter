@@ -1,33 +1,56 @@
-import time
+# api_gateway/main.py
+import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response, HTTPException, status, Header, Depends
 from fastapi.responses import JSONResponse
-from grpc_client import MockRateLimiterClient
+
+# Import our new client engine and global microservice settings
+from grpc_client import RateLimiterClient
 from config import settings
 
-print(f"Gateway configured to route gRPC calls to -> {settings.ENGINE_HOST}:{settings.ENGINE_PORT}")
+# Setup standard structured logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("api_gateway.main")
+
+# ---------------------------------------------------------
+# MICROSERVICE LIFECYCLE MANAGEMENT (Lifespan Context)
+# ---------------------------------------------------------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    
+    # Manages the operational readiness lifecycle of the microservice layer.
+    # Guarantees long-lived gRPC tunnels boot and shut down atomically.
+    
+    # Initialize our production gRPC client targeting configuration port
+    global limiter_client
+    limiter_client = RateLimiterClient(host=settings.ENGINE_HOST, port=settings.ENGINE_PORT)
+    
+    # Trigger connection pool startup sequence
+    await limiter_client.start()
+    logger.info("Successfully bound live asynchronous gRPC tunnel to Limiter Engine.")
+    
+    yield # Execution checkpoint where FastAPI starts accepting public HTTP web requests
+    
+    # Trigger teardown sequence when worker processes receive termination signals
+    await limiter_client.close()
+    logger.info("Gateway client connections closed completely.")
+
+# Instantiating FastAPI App utilizing unified lifecycle tracking
 app = FastAPI(
     title="Distributed Rate Limiter Gateway",
     description="High-performance edge proxy gateway running over async gRPC.",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
-# Initialize client wrapper
-limiter_client = MockRateLimiterClient()
-
 # ---------------------------------------------------------
-# GLOBAL MIDDLEWARE INTERCEPTOR
+# GLOBAL MIDDLEWARE INTERCEPTOR (Slightly altered to reference global client safely)
 # ---------------------------------------------------------
 @app.middleware("http")
 async def rate_limiter_middleware(request: Request, call_next):
-
-    # Global interceptor middleware that intercepts all incoming HTTP requests,
-    # extracts client identifiers, and verifies compliance against the rate limiter.
-
-    # Skip rate limiting for the basic health check root path
     if request.url.path in ["/", "/docs", "/openapi.json"]:
         return await call_next(request)
         
-    # Extract client identifier from custom headers
     user_id = request.headers.get("X-User-ID")
     if not user_id:
         return JSONResponse(
@@ -38,7 +61,7 @@ async def rate_limiter_middleware(request: Request, call_next):
     rate_limit_key = f"user:{user_id}"
     
     try:
-        # Communicate asynchronously with the rate limiting engine layer
+        # Check limit against live gRPC proxy engine client wrapper
         verdict = await limiter_client.check_limit(
             key=rate_limit_key,
             max_tokens=100,
@@ -46,7 +69,6 @@ async def rate_limiter_middleware(request: Request, call_next):
             algorithm="token_bucket"
         )
         
-        # Handle Rate Limited Short-Circuiting Action
         if not verdict["allowed"]:
             return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -54,38 +76,26 @@ async def rate_limiter_middleware(request: Request, call_next):
                 headers={"Retry-After": "30"}
             )
             
-        # If allowed, execute the underlying API route
         response: Response = await call_next(request)
-        
-        # Inject updated rate limit capacity metrics directly into response headers
         response.headers["X-RateLimit-Remaining"] = str(verdict["remaining_tokens"])
         response.headers["X-RateLimit-Reset"] = str(verdict["reset_time_seconds"])
         
         return response
 
     except Exception as e:
-        # Fallback security handling: Default-Allow if middleware fails internally
-        print(f"Middleware Engine Fallback Warning: {e}")
+        logger.warning(f"Middleware Engine Fallback Warning: {e}")
         return await call_next(request)
 
-async def verify_security_headers(x_user_id: str = Header(..., description="Unique user or client identifier")):
-    """Helper dependency to force Swagger UI to render the input field box."""
+# ---------------------------------------------------------
+# CORE APIs
+# ---------------------------------------------------------
+async def verify_security_headers(x_user_id: str = Header(..., description="Unique user identifier")):
     return x_user_id
 
-# ---------------------------------------------------------
-# CLEAN CLEANED ROUTES (No rate limiting code mixed in!)
-# ---------------------------------------------------------
 @app.get("/")
 async def root():
-    """Basic health check endpoint."""
     return {"status": "healthy", "service": "api_gateway"}
 
 @app.get("/api/v1/resource", dependencies=[Depends(verify_security_headers)])
 async def protected_resource():
-    """A high-value endpoint protected transparently by global middleware."""
     return {"message": "Success! You accessed the protected resource cleanly."}
-
-@app.get("/api/v1/other-data", dependencies=[Depends(verify_security_headers)])
-async def another_protected_resource():
-    """A brand new endpoint that is automatically rate-limited with zero extra code!"""
-    return {"message": "Success! This path is also globally protected."}
