@@ -2,7 +2,9 @@ import time
 from fastapi import FastAPI, Request, Response, HTTPException, status, Header, Depends
 from fastapi.responses import JSONResponse
 from grpc_client import MockRateLimiterClient
+from config import settings
 
+print(f"Gateway configured to route gRPC calls to -> {settings.ENGINE_HOST}:{settings.ENGINE_PORT}")
 app = FastAPI(
     title="Distributed Rate Limiter Gateway",
     description="High-performance edge proxy gateway running over async gRPC.",
