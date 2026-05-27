@@ -1,4 +1,6 @@
-from fastapi import FastAPI, Header, HTTPException, status
+import time
+from fastapi import FastAPI, Request, Response, HTTPException, status
+from fastapi.responses import JSONResponse
 from grpc_client import MockRateLimiterClient
 
 app = FastAPI(
@@ -10,42 +12,75 @@ app = FastAPI(
 # Initialize client wrapper
 limiter_client = MockRateLimiterClient()
 
+# ---------------------------------------------------------
+# GLOBAL MIDDLEWARE INTERCEPTOR
+# ---------------------------------------------------------
+@app.middleware("http")
+async def rate_limiter_middleware(request: Request, call_next):
+    """
+    Global interceptor middleware that intercepts all incoming HTTP requests,
+    extracts client identifiers, and verifies compliance against the rate limiter.
+    """
+    # 1. Skip rate limiting for the basic health check root path
+    if request.url.path in ["/", "/docs", "/openapi.json"]:
+        return await call_next(request)
+        
+    # 2. Extract client identifier from custom headers
+    user_id = request.headers.get("X-User-ID")
+    if not user_id:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": "Missing required security header: X-User-ID"}
+        )
+        
+    rate_limit_key = f"user:{user_id}"
+    
+    try:
+        # 3. Communicate asynchronously with the rate limiting engine layer
+        verdict = await limiter_client.check_limit(
+            key=rate_limit_key,
+            max_tokens=100,
+            refill_rate=2.0,
+            algorithm="token_bucket"
+        )
+        
+        # 4. Handle Rate Limited Short-Circuiting Action
+        if not verdict["allowed"]:
+            return JSONResponse(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                content={"detail": "Too Many Requests. Rate limit exceeded."},
+                headers={"Retry-After": "30"}
+            )
+            
+        # 5. If allowed, execute the underlying API route
+        response: Response = await call_next(request)
+        
+        # 6. Inject updated rate limit capacity metrics directly into response headers
+        response.headers["X-RateLimit-Remaining"] = str(verdict["remaining_tokens"])
+        response.headers["X-RateLimit-Reset"] = str(verdict["reset_time_seconds"])
+        
+        return response
+
+    except Exception as e:
+        # Fallback security handling: Default-Allow if middleware fails internally
+        print(f"Middleware Engine Fallback Warning: {e}")
+        return await call_next(request)
+
+
+# ---------------------------------------------------------
+# CLEAN CLEANED ROUTES (No rate limiting code mixed in!)
+# ---------------------------------------------------------
 @app.get("/")
 async def root():
     """Basic health check endpoint."""
     return {"status": "healthy", "service": "api_gateway"}
 
 @app.get("/api/v1/resource")
-async def protected_resource(x_user_id: str = Header(..., alias="X-User-ID")):
-    """
-    A mock protected API route representing a high-value endpoint 
-    (like a ticket checkout, login, or public resource).
-    """
-    # 1. We extract the client's unique key from the headers
-    rate_limit_key = f"user:{x_user_id}"
-    
-    # 2. Forward the request details to our evaluation engine layer
-    # For now, passing standard limits: max 100 requests bursting, refilling at 2/sec
-    verdict = await limiter_client.check_limit(
-        key=rate_limit_key,
-        max_tokens=100,
-        refill_rate=2.0,
-        algorithm="token_bucket"
-    )
-    
-    # 3. Handle the rate limiting evaluation action
-    if not verdict["allowed"]:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too Many Requests. Rate limit exceeded.",
-            headers={"Retry-After": "30"}
-        )
-        
-    # 4. If allowed, pass request cleanly to our internal resource
-    return {
-        "message": "Success! You accessed the protected resource cleanly.",
-        "rate_limit_status": {
-            "remaining": verdict["remaining_tokens"],
-            "reset_at": verdict["reset_time_seconds"]
-        }
-    }
+async def protected_resource():
+    """A high-value endpoint protected transparently by global middleware."""
+    return {"message": "Success! You accessed the protected resource cleanly."}
+
+@app.get("/api/v1/other-data")
+async def another_protected_resource():
+    """A brand new endpoint that is automatically rate-limited with zero extra code!"""
+    return {"message": "Success! This path is also globally protected."}
