@@ -22,37 +22,25 @@ class TokenBucketLimiter(BaseRateLimiter):
 
     async def is_allowed(self, key: str, max_tokens: int, refill_rate: float) -> tuple[bool, int, int]:
         """Executes the cached Lua script atomically over the Redis instance."""
-        # Get an active client from our global connection pool
+        import typing
         client = redis_manager.get_client()
-        
-        # Ensure the Lua script is loaded into Redis memory
         await self._load_lua_script(client)
         
-        # Current Unix timestamp in seconds
         current_time = int(time.time())
-        # Cost per request (1 API call equals 1 token)
         token_cost = 1 
-        
-        # Format the unique storage key name inside the Redis database
         redis_key = f"ratelimit:token_bucket:{key}"
 
         try:
-            # Run the script using its cached SHA hash instead of passing the whole file text
-            result = await client.evalsha(
-                self.lua_sha, 
-                1,              # Number of keys being sent
-                redis_key,      # KEYS[1]
-                max_tokens,    # ARGV[1]
-                refill_rate,   # ARGV[2]
-                current_time,  # ARGV[3]
-                token_cost     # ARGV[4]
-            )
+            # Run the script and cast it to a type Pylance understands
+            result = await client.evalsha(self.lua_sha, 1, redis_key, max_tokens, refill_rate, current_time, token_cost)  # type: ignore
+            typed_result = typing.cast(typing.List[int], result)
             
-            # Unpack the array returned by Lua: [allowed_int, remaining, reset_time]
-            allowed_int, remaining, reset_time = result
+            allowed_int = typed_result[0]
+            remaining = typed_result[1]
+            reset_time = typed_result[2]
+            
             return bool(allowed_int), remaining, reset_time
             
         except Exception as e:
             print(f"Fallback triggered. Error executing Lua script: {e}")
-            # Fault tolerance: if Redis fails, fail-safe open so the app doesn't crash for users
             return True, max_tokens, current_time
