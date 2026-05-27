@@ -17,15 +17,15 @@ limiter_client = MockRateLimiterClient()
 # ---------------------------------------------------------
 @app.middleware("http")
 async def rate_limiter_middleware(request: Request, call_next):
-    """
-    Global interceptor middleware that intercepts all incoming HTTP requests,
-    extracts client identifiers, and verifies compliance against the rate limiter.
-    """
-    # 1. Skip rate limiting for the basic health check root path
+
+    # Global interceptor middleware that intercepts all incoming HTTP requests,
+    # extracts client identifiers, and verifies compliance against the rate limiter.
+
+    # Skip rate limiting for the basic health check root path
     if request.url.path in ["/", "/docs", "/openapi.json"]:
         return await call_next(request)
         
-    # 2. Extract client identifier from custom headers
+    # Extract client identifier from custom headers
     user_id = request.headers.get("X-User-ID")
     if not user_id:
         return JSONResponse(
@@ -36,7 +36,7 @@ async def rate_limiter_middleware(request: Request, call_next):
     rate_limit_key = f"user:{user_id}"
     
     try:
-        # 3. Communicate asynchronously with the rate limiting engine layer
+        # Communicate asynchronously with the rate limiting engine layer
         verdict = await limiter_client.check_limit(
             key=rate_limit_key,
             max_tokens=100,
@@ -44,7 +44,7 @@ async def rate_limiter_middleware(request: Request, call_next):
             algorithm="token_bucket"
         )
         
-        # 4. Handle Rate Limited Short-Circuiting Action
+        # Handle Rate Limited Short-Circuiting Action
         if not verdict["allowed"]:
             return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -52,10 +52,10 @@ async def rate_limiter_middleware(request: Request, call_next):
                 headers={"Retry-After": "30"}
             )
             
-        # 5. If allowed, execute the underlying API route
+        # If allowed, execute the underlying API route
         response: Response = await call_next(request)
         
-        # 6. Inject updated rate limit capacity metrics directly into response headers
+        # Inject updated rate limit capacity metrics directly into response headers
         response.headers["X-RateLimit-Remaining"] = str(verdict["remaining_tokens"])
         response.headers["X-RateLimit-Reset"] = str(verdict["reset_time_seconds"])
         
