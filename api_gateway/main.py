@@ -1,5 +1,5 @@
 import time
-from fastapi import FastAPI, Request, Response, HTTPException, status
+from fastapi import FastAPI, Request, Response, HTTPException, status, Header, Depends
 from fastapi.responses import JSONResponse
 from grpc_client import MockRateLimiterClient
 
@@ -66,6 +66,9 @@ async def rate_limiter_middleware(request: Request, call_next):
         print(f"Middleware Engine Fallback Warning: {e}")
         return await call_next(request)
 
+async def verify_security_headers(x_user_id: str = Header(..., description="Unique user or client identifier")):
+    """Helper dependency to force Swagger UI to render the input field box."""
+    return x_user_id
 
 # ---------------------------------------------------------
 # CLEAN CLEANED ROUTES (No rate limiting code mixed in!)
@@ -75,12 +78,12 @@ async def root():
     """Basic health check endpoint."""
     return {"status": "healthy", "service": "api_gateway"}
 
-@app.get("/api/v1/resource")
+@app.get("/api/v1/resource", dependencies=[Depends(verify_security_headers)])
 async def protected_resource():
     """A high-value endpoint protected transparently by global middleware."""
     return {"message": "Success! You accessed the protected resource cleanly."}
 
-@app.get("/api/v1/other-data")
+@app.get("/api/v1/other-data", dependencies=[Depends(verify_security_headers)])
 async def another_protected_resource():
     """A brand new endpoint that is automatically rate-limited with zero extra code!"""
     return {"message": "Success! This path is also globally protected."}
