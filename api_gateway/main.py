@@ -1,14 +1,14 @@
 # api_gateway/main.py
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, Response, HTTPException, status, Header, Depends
+from fastapi import FastAPI, Request, Response, status
 from fastapi.responses import JSONResponse
 
-# Import our new client engine and global microservice settings
+# Import our client engine, global configuration settings, and routers
 from grpc_client import RateLimiterClient
 from config import settings
+from routers import protected_routes  # <-- Import your new modular router
 
-# Setup standard structured logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("api_gateway.main")
 
@@ -17,22 +17,17 @@ logger = logging.getLogger("api_gateway.main")
 # ---------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Manages the operational readiness lifecycle of the microservice layer.
-    # Guarantees long-lived gRPC tunnels boot and shut down atomically.
     global limiter_client
     limiter_client = RateLimiterClient(host=settings.ENGINE_HOST, port=settings.ENGINE_PORT)
-    
-    # Trigger connection pool startup sequence
     await limiter_client.start()
     logger.info("Successfully bound live asynchronous gRPC tunnel to Limiter Engine.")
     
-    yield # Execution checkpoint where FastAPI starts accepting public HTTP web requests
+    yield
     
-    # Trigger teardown sequence when worker processes receive termination signals
     await limiter_client.close()
     logger.info("Gateway client connections closed completely.")
 
-# Instantiating FastAPI App utilizing unified lifecycle tracking
+# Instantiating FastAPI App
 app = FastAPI(
     title="Distributed Rate Limiter Gateway",
     description="High-performance edge proxy gateway running over async gRPC.",
@@ -40,12 +35,15 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Register our sub-router modules dynamically onto the app instance
+app.include_router(protected_routes.router)  # <-- Mounts /api/v1/resource cleanly
+
 # ---------------------------------------------------------
 # GLOBAL MIDDLEWARE INTERCEPTOR
 # ---------------------------------------------------------
 @app.middleware("http")
 async def rate_limiter_middleware(request: Request, call_next):
-    # Bypass tracking for system meta endpoints
+    # Pass basic check routes cleanly without querying Redis
     if request.url.path in ["/", "/docs", "/openapi.json"]:
         return await call_next(request)
         
@@ -57,18 +55,15 @@ async def rate_limiter_middleware(request: Request, call_next):
         )
         
     rate_limit_key = f"user:{user_id}"
-    
-    # Extract client algorithm choice dynamically from headers; fallback safely to token_bucket
     chosen_algo = request.headers.get("X-Limiter-Algo", "token_bucket").lower()
     if chosen_algo not in ["token_bucket", "sliding_window"]:
         chosen_algo = "token_bucket"
     
     try:
-        # Check limit against live gRPC proxy engine client wrapper dynamically
         verdict = await limiter_client.check_limit(
             key=rate_limit_key,
             max_tokens=100,
-            refill_rate=2.0,  # 2 tokens per second or 60s window sizing
+            refill_rate=2.0,
             algorithm=chosen_algo
         )
         
@@ -90,16 +85,7 @@ async def rate_limiter_middleware(request: Request, call_next):
         logger.warning(f"Middleware Engine Fallback Warning: {e}")
         return await call_next(request)
 
-# ---------------------------------------------------------
-# CORE APIs
-# ---------------------------------------------------------
-async def verify_security_headers(x_user_id: str = Header(..., description="Unique user identifier")):
-    return x_user_id
-
+# Basic health status API kept directly in main
 @app.get("/")
 async def root():
     return {"status": "healthy", "service": "api_gateway"}
-
-@app.get("/api/v1/resource", dependencies=[Depends(verify_security_headers)])
-async def protected_resource():
-    return {"message": "Success! You accessed the protected resource cleanly."}
