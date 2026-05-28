@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  # 1. State Store: High-Performance In-Memory Redis Core
+  redis:
+    image: redis:7.2-alpine
+    container_name: rate_limiter_redis
+    ports:
+      - "6379:6379"
+    # Run Redis with memory optimization and persistent background save disabling for max RPS
+    command: redis-server --appendonly no --save ""
+    networks:
+      - rate_limiter_network
+
+  # 2. Stateful Evaluation gRPC Engine Server
+  limiter_engine:
+    build:
+      context: ./distributed-rate-limiter-gagan-engine-setup
+      dockerfile: limiter_engine/Dockerfile
+    container_name: rate_limiter_engine
+    ports:
+      - "50051:50051"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - redis
+    networks:
+      - rate_limiter_network
+
+  # 3. Sameer's Domain: Public-Facing Asynchronous FastAPI Web Gateway Proxy
+  api_gateway:
+    build:
+      context: ./api_gateway
+      dockerfile: Dockerfile
+    container_name: rate_limiter_gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - ENGINE_HOST=limiter_engine
+      - ENGINE_PORT=50051
+      - APP_PORT=8000
+    depends_on:
+      - limiter_engine
+    networks:
+      - rate_limiter_network
+
+networks:
+  rate_limiter_network:
+    driver: bridge
