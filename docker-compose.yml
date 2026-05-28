@@ -15,8 +15,8 @@ services:
   # 2. Stateful Evaluation gRPC Engine Server
   limiter_engine:
     build:
-      context: ./distributed-rate-limiter-gagan-engine-setup
-      dockerfile: limiter_engine/Dockerfile
+      context: ./limiter_engine
+      dockerfile: Dockerfile
     container_name: rate_limiter_engine
     ports:
       - "50051:50051"

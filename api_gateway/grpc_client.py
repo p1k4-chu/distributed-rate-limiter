@@ -36,6 +36,8 @@ class RateLimiterClient:
                     ('grpc.max_send_message_length', 4 * 1024 * 1024),
                     ('grpc.keepalive_time_ms', 30000),                    # Keep connections alive
                     ('grpc.keepalive_timeout_ms', 5000),
+                    ('grpc.dns_enable_srv_queries', 0),                  # Disable intensive SRV lookup
+                    ('grpc.fallback_to_ipv4_or_ipv6', 'ipv4'),           # Force IPv4 channel priority over Docker network
                 ]
             )
             self._stub = rate_limiter_pb2_grpc.RateLimiterStub(self._channel)
@@ -79,15 +81,14 @@ class RateLimiterClient:
             }
 
         except grpc.RpcError as rpc_err:
-            # Fallback Execution Protocol: Log error context explicitly for metrics tracking
             logger.error(
                 f"CRITICAL: Rate Limiter gRPC microservice communication link broken! "
                 f"Code: {rpc_err.code()}, Details: {rpc_err.details()}. Executing Fail-Open procedure."
             )
             
-            # Default-Allow connection path fallback so our core API platforms stay highly available
+            # FIX: Return 0 so that the gateway middleware doesn't calculate wild or negative retry intervals
             return {
                 "allowed": True,
                 "remaining_tokens": max_tokens,
-                "reset_time_seconds": int(time.time()) + 1
+                "reset_time_seconds": 0
             }

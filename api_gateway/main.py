@@ -1,4 +1,5 @@
-# api_gateway/main.py
+import time
+import grpc
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response, status
@@ -68,10 +69,16 @@ async def rate_limiter_middleware(request: Request, call_next):
         )
         
         if not verdict["allowed"]:
+            # FIX: Dynamically calculate the standard cooldown delta instead of using a hardcoded "30"
+            current_time = int(time.time())
+            cooldown_seconds = max(0, verdict["reset_time_seconds"] - current_time)
+            if cooldown_seconds == 0:
+                cooldown_seconds = 1  # Fallback minimum safe ceiling
+                
             return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 content={"detail": f"Too Many Requests. Rate limit exceeded via {chosen_algo}."},
-                headers={"Retry-After": "30"}
+                headers={"Retry-After": str(cooldown_seconds)}
             )
             
         response: Response = await call_next(request)
@@ -81,8 +88,9 @@ async def rate_limiter_middleware(request: Request, call_next):
         
         return response
 
-    except Exception as e:
-        logger.warning(f"Middleware Engine Fallback Warning: {e}")
+    except (grpc.RpcError, RuntimeError) as network_err:
+        # FIX: Catch precise network faults to handle fail-open safely without masking syntax/runtime bugs
+        logger.warning(f"Middleware Engine Network Fallback Triggered: {network_err}")
         return await call_next(request)
 
 # Basic health status API kept directly in main

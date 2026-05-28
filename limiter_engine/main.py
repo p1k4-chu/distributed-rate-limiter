@@ -3,8 +3,8 @@ import grpc
 from concurrent import futures
 from typing import Any
 # Import the auto-generated gRPC stubs that we compiled earlier
-from protobuf import rate_limiter_pb2
-from protobuf import rate_limiter_pb2_grpc
+import rate_limiter_pb2
+import rate_limiter_pb2_grpc
 
 # Import your connection manager and algorithm classes
 from redis_client import redis_manager
