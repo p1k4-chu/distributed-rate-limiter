@@ -1,0 +1,5 @@
+fastapi==0.111.0
+uvicorn==0.30.0
+grpcio==1.64.0
+grpcio-tools==1.64.0
+pydantic==2.7.2
