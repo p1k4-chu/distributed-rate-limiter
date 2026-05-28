@@ -3,14 +3,13 @@ import grpc
 from concurrent import futures
 from typing import Any
 # Import the auto-generated gRPC stubs that we compiled earlier
-from limiter_engine.protobuf import rate_limiter_pb2
-from limiter_engine.protobuf import rate_limiter_pb2_grpc
+from protobuf import rate_limiter_pb2
+from protobuf import rate_limiter_pb2_grpc
 
 # Import your connection manager and algorithm classes
-from limiter_engine.redis_client import redis_manager
-from limiter_engine.algorithms.token_bucket import TokenBucketLimiter
-from limiter_engine.algorithms.sliding_window import SlidingWindowLimiter
-
+from redis_client import redis_manager
+from algorithms.token_bucket import TokenBucketLimiter
+from algorithms.sliding_window import SlidingWindowLimiter
 class RateLimiterServicer(rate_limiter_pb2_grpc.RateLimiterServicer):
     """
     Implements the gRPC network interface defined in Sameer's rate_limiter.proto file.

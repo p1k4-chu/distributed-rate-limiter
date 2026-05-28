@@ -1,7 +1,7 @@
 import os
 import time
-from limiter_engine.algorithms.base_limiter import BaseRateLimiter
-from limiter_engine.redis_client import redis_manager
+from algorithms.base_limiter import BaseRateLimiter
+from redis_client import redis_manager
 
 class TokenBucketLimiter(BaseRateLimiter):
     def __init__(self):
