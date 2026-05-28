@@ -17,11 +17,8 @@ logger = logging.getLogger("api_gateway.main")
 # ---------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    
     # Manages the operational readiness lifecycle of the microservice layer.
     # Guarantees long-lived gRPC tunnels boot and shut down atomically.
-    
-    # Initialize our production gRPC client targeting configuration port
     global limiter_client
     limiter_client = RateLimiterClient(host=settings.ENGINE_HOST, port=settings.ENGINE_PORT)
     
@@ -44,10 +41,11 @@ app = FastAPI(
 )
 
 # ---------------------------------------------------------
-# GLOBAL MIDDLEWARE INTERCEPTOR (Slightly altered to reference global client safely)
+# GLOBAL MIDDLEWARE INTERCEPTOR
 # ---------------------------------------------------------
 @app.middleware("http")
 async def rate_limiter_middleware(request: Request, call_next):
+    # Bypass tracking for system meta endpoints
     if request.url.path in ["/", "/docs", "/openapi.json"]:
         return await call_next(request)
         
@@ -60,25 +58,31 @@ async def rate_limiter_middleware(request: Request, call_next):
         
     rate_limit_key = f"user:{user_id}"
     
+    # Extract client algorithm choice dynamically from headers; fallback safely to token_bucket
+    chosen_algo = request.headers.get("X-Limiter-Algo", "token_bucket").lower()
+    if chosen_algo not in ["token_bucket", "sliding_window"]:
+        chosen_algo = "token_bucket"
+    
     try:
-        # Check limit against live gRPC proxy engine client wrapper
+        # Check limit against live gRPC proxy engine client wrapper dynamically
         verdict = await limiter_client.check_limit(
             key=rate_limit_key,
             max_tokens=100,
-            refill_rate=2.0,
-            algorithm="token_bucket"
+            refill_rate=2.0,  # 2 tokens per second or 60s window sizing
+            algorithm=chosen_algo
         )
         
         if not verdict["allowed"]:
             return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                content={"detail": "Too Many Requests. Rate limit exceeded."},
+                content={"detail": f"Too Many Requests. Rate limit exceeded via {chosen_algo}."},
                 headers={"Retry-After": "30"}
             )
             
         response: Response = await call_next(request)
         response.headers["X-RateLimit-Remaining"] = str(verdict["remaining_tokens"])
         response.headers["X-RateLimit-Reset"] = str(verdict["reset_time_seconds"])
+        response.headers["X-RateLimit-Algo"] = chosen_algo
         
         return response
 
