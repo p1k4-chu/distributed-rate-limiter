@@ -17,6 +17,7 @@ A high-performance, low-latency distributed rate-limiting system designed to saf
 
 ## 🛠️ System Workflow Diagram
 
+```text 
 [ Client Request ]
        │
        ▼
@@ -35,7 +36,7 @@ A high-performance, low-latency distributed rate-limiting system designed to saf
 ┌──────────────────────────────┐
 │   Distributed Redis Tier     │
 └──────────────────────────────┘
----
+```
 
 # Technical Stack & Ecosystem
 
