@@ -17,7 +17,6 @@ A high-performance, low-latency distributed rate-limiting system designed to saf
 
 ## 🛠️ System Workflow Diagram
 
-```text
 [ Client Request ]
        │
        ▼
@@ -36,28 +35,24 @@ A high-performance, low-latency distributed rate-limiting system designed to saf
 ┌──────────────────────────────┐
 │   Distributed Redis Tier     │
 └──────────────────────────────┘
+---
 
 # Technical Stack & Ecosystem
 
-## Engine Core
+> ###  Engine Core
+> Python 3.12, Asyncio Framework
 
-Python 3.12, Asyncio Framework
+> ###  Memory/Scripting Layer
+> Redis Enterprise Data Structures, Embedded Lua Scripts
 
-## Memory/Scripting Layer
+> ###  Communication Layer
+> gRPC, Protocol Buffers (proto3)
 
-Redis Enterprise Data Structures, Embedded Lua Scripts
+> ###  API Edge Routing
+> FastAPI, Uvicorn Server
 
-## Communication Layer
-
-gRPC, Protocol Buffers (proto3)
-
-## API Edge Routing
-
-FastAPI, Uvicorn Server
-
-## Infrastructure Tooling
-
-Multi-stage Docker, Docker Compose
+> ###  Infrastructure Tooling
+> Multi-stage Docker, Docker Compose
 
 ---
 
@@ -73,7 +68,7 @@ Open your terminal inside the main project directory and run this single command
 
 #### Bash
 
-```bash id="u9g1a2"
+```bash
 docker compose up --build
 ```
 
