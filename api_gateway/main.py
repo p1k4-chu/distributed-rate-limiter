@@ -4,6 +4,7 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response, status
 from fastapi.responses import JSONResponse
+from starlette.datastructures import MutableHeaders
 
 # Import our client engine, global configuration settings, and routers
 from grpc_client import RateLimiterClient
@@ -64,27 +65,39 @@ async def rate_limiter_middleware(request: Request, call_next):
         verdict = await limiter_client.check_limit(
             key=rate_limit_key,
             max_tokens=100,
-            refill_rate=2.0,
+            refill_rate=60.0,
             algorithm=chosen_algo
         )
         
         if not verdict["allowed"]:
-            # FIX: Dynamically calculate the standard cooldown delta instead of using a hardcoded "30"
             current_time = int(time.time())
-            cooldown_seconds = max(0, verdict["reset_time_seconds"] - current_time)
-            if cooldown_seconds == 0:
-                cooldown_seconds = 1  # Fallback minimum safe ceiling
-                
+            
+            # If the user is empty on the token bucket algorithm, compute the minimal 
+            # wait time for exactly ONE single token to regenerate rather than the entire capacity.
+            if chosen_algo == "token_bucket":
+                # With a max_tokens=100 and refill_rate=60.0 (seconds), 
+                # 1 token takes (60.0 / 100) = 0.6 seconds to regenerate.
+                # We round up to 1 second as a minimum safe integer ceiling for the Retry-After header.
+                cooldown_seconds = 1 
+            else:
+                # Sliding window continues using standard moving boundary reset calculation
+                cooldown_seconds = max(0, verdict["reset_time_seconds"] - current_time)
+                if cooldown_seconds == 0:
+                    cooldown_seconds = 1  # Fallback minimum safe ceiling
             return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 content={"detail": f"Too Many Requests. Rate limit exceeded via {chosen_algo}."},
                 headers={"Retry-After": str(cooldown_seconds)}
             )
             
-        response: Response = await call_next(request)
-        response.headers["X-RateLimit-Remaining"] = str(verdict["remaining_tokens"])
-        response.headers["X-RateLimit-Reset"] = str(verdict["reset_time_seconds"])
-        response.headers["X-RateLimit-Algo"] = chosen_algo
+        # Wait for downstream route execution context to complete safely
+        response = await call_next(request)
+        
+        # Instantiate a mutable interface mapping wrapping the response bytes stream raw headers
+        headers = MutableHeaders(raw=response.headers.raw)
+        headers["X-RateLimit-Remaining"] = str(verdict["remaining_tokens"])
+        headers["X-RateLimit-Reset"] = str(verdict["reset_time_seconds"])
+        headers["X-RateLimit-Algo"] = chosen_algo
         
         return response
 

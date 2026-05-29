@@ -37,7 +37,6 @@ class RateLimiterClient:
                     ('grpc.keepalive_time_ms', 30000),                    # Keep connections alive
                     ('grpc.keepalive_timeout_ms', 5000),
                     ('grpc.dns_enable_srv_queries', 0),                  # Disable intensive SRV lookup
-                    ('grpc.fallback_to_ipv4_or_ipv6', 'ipv4'),           # Force IPv4 channel priority over Docker network
                 ]
             )
             self._stub = rate_limiter_pb2_grpc.RateLimiterStub(self._channel)
@@ -86,9 +85,14 @@ class RateLimiterClient:
                 f"Code: {rpc_err.code()}, Details: {rpc_err.details()}. Executing Fail-Open procedure."
             )
             
-            # FIX: Return 0 so that the gateway middleware doesn't calculate wild or negative retry intervals
+            # FIX: If the channel is dead or unavailable, dismantle the pointers
+            # so the next incoming request forces a clean, fresh channel rebuild pool.
+            if rpc_err.code() in [grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED]:
+                self._channel = None
+                self._stub = None
+            
             return {
                 "allowed": True,
                 "remaining_tokens": max_tokens,
-                "reset_time_seconds": 0
+                "reset_time_seconds": int(time.time())
             }

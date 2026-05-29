@@ -1,4 +1,3 @@
 grpcio
 grpcio-tools
 redis
-aioredis

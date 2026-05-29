@@ -36,13 +36,21 @@ class RateLimiterServicer(rate_limiter_pb2_grpc.RateLimiterServicer):
 
         # Route the request to the correct algorithm handler dynamically
         limiter = self.limiters.get(algorithm)
-        
+
         if not limiter:
-            # Fault tolerance fallback: default to token_bucket if Sameer sends an unknown string
             limiter = self.limiters["token_bucket"]
 
+        # Assign clean production semantic mappings
+        if algorithm == "token_bucket":
+            # Convert window duration to tokens-per-second fill speed natively
+            # Example: 100 tokens / 60 seconds = 1.66 tokens replenished per second
+            actual_refill_rate = max_tokens / refill_rate
+        else:
+            # For sliding window, the refill_rate parameter IS the window duration in seconds (e.g., 60.0)
+            actual_refill_rate = refill_rate
+
         # Run the evaluation logic asynchronously over Redis
-        allowed, remaining, reset_time = await limiter.is_allowed(key, max_tokens, refill_rate)
+        allowed, remaining, reset_time = await limiter.is_allowed(key, max_tokens, actual_refill_rate)
 
         # Pack the calculation output into Sameer's exact gRPC response format
         return rate_limiter_pb2.RateLimitResponse(  # type: ignore

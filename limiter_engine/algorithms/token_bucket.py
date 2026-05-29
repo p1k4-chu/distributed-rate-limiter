@@ -2,6 +2,7 @@ import os
 import time
 from algorithms.base_limiter import BaseRateLimiter
 from redis_client import redis_manager
+import redis.asyncio as aioredis
 
 class TokenBucketLimiter(BaseRateLimiter):
     def __init__(self):
@@ -40,6 +41,21 @@ class TokenBucketLimiter(BaseRateLimiter):
             reset_time = typed_result[2]
             
             return bool(allowed_int), remaining, reset_time
+            
+        except aioredis.exceptions.ResponseError as redis_err:
+            # Catch specific script loss in Redis engine memory natively using your aioredis import
+            if "NOSCRIPT" in str(redis_err):
+                print("Detected Redis cache script eviction. Re-caching script mapping immediately...")
+                self.lua_sha = None
+                await self._load_lua_script(client)
+                
+                # Retry evaluation directly once script cache is recovered
+                result = await client.evalsha(self.lua_sha, 1, redis_key, max_tokens, refill_rate, current_time, token_cost) # type: ignore
+                typed_result = typing.cast(typing.List[int], result)
+                return bool(typed_result[0]), typed_result[1], typed_result[2]
+            
+            print(f"Unhandled Redis internal operational exception occurred: {redis_err}")
+            return True, max_tokens, current_time
             
         except Exception as e:
             print(f"Fallback triggered. Error executing Lua script: {e}")

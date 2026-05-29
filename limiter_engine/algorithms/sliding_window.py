@@ -22,28 +22,37 @@ class SlidingWindowLimiter(BaseRateLimiter):
         redis_key = f"ratelimit:sliding_window:{key}"
         
         try:
-            # 2. Pipeline transaction blocks to evaluate elements cleanly
+            import uuid
+            member_id = f"{now_ms}:{uuid.uuid4().hex[:6]}"
+
+            # Execute all pipeline operations atomically in a single network round-trip
             async with client.pipeline(transaction=True) as pipe:
+                # 1. Clean out metrics older than the sliding window threshold
                 pipe.zremrangebyscore(redis_key, 0, clear_before_ms)
-                pipe.zcard(redis_key)
-                _, current_request_count = await pipe.execute()
-            
-            # 3. Evaluate allowance thresholds
-            if current_request_count < max_tokens:
-                allowed = True
-                remaining_tokens = max_tokens - (current_request_count + 1)
+                # 2. Optimistically log the current request element
+                pipe.zadd(redis_key, {member_id: now_ms})
+                # 3. Request count of active items in the moving window
+                pipe.zcount(redis_key, clear_before_ms + 1, "+inf")
+                # 4. Fetch the oldest element's score inside the transaction to prevent multi-threaded drift
+                pipe.zrange(redis_key, 0, 0, withscores=True)
+                # 5. Reset TTL key timeout rules
+                pipe.expire(redis_key, 3600)
                 
-                # FIX: Bundle write execution using an explicit atomic pipeline transaction block
-                async with client.pipeline(transaction=True) as write_pipe:
-                    write_pipe.zadd(redis_key, {str(now_ms): now_ms})
-                    write_pipe.expire(redis_key, 3600)  
-                    await write_pipe.execute()
+                # Unpack atomic result sets cleanly
+                _, _, current_request_count, oldest_logs, _ = await pipe.execute()
+
+            # Evaluate thresholds using the transaction calculation snapshots
+            if current_request_count <= max_tokens:
+                allowed = True
+                remaining_tokens = max_tokens - current_request_count
             else:
                 allowed = False
                 remaining_tokens = 0
+                # Corrective cleanup can happen immediately; we don't block subsequent requests 
+                # because the atomic pipeline transaction was the source of truth for tracking.
+                await client.zrem(redis_key, member_id)
                 
-            # 4. FIX: Decode the oldest entry's millisecond score and cast safely back to precise seconds
-            oldest_logs = await client.zrange(redis_key, 0, 0, withscores=True)
+            # Compute reset time directly from the atomic oldest log record
             if oldest_logs:
                 oldest_timestamp_ms = oldest_logs[0][1]
                 reset_time_seconds = int((oldest_timestamp_ms + window_size_ms) / 1000)
