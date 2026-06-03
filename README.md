@@ -57,72 +57,150 @@ A high-performance, low-latency distributed rate-limiting system designed to saf
 
 ---
 
-# Step-by-Step Deployment & Testing Guide
+#  Running the Distributed Rate Limiter 
 
-Follow these exact steps to launch the system cluster and verify that the rate-limiter is actively dropping traffic.
+This guide walks you through launching the complete distributed rate limiter system, generating traffic, and monitoring its behavior in real time.
 
 ---
 
-## Step 1: Deploy the Project Layout using Docker
+## Step 1: Start the Distributed Infrastructure
 
-Open your terminal inside the main project directory and run this single command to build and boot up the API Gateway, your core Engine, and the Redis instance simultaneously:
+Build and launch all services using Docker Compose.
 
-#### Bash
+### Services Started
+
+* Redis State Tier
+* gRPC Evaluation Engine
+* FastAPI Edge Gateway
+
+### Commands
+
+Open a terminal in the project root directory:
+
+```bash
+cd distributed-rate-limiter
+```
+
+Build and start all containers:
 
 ```bash
 docker compose up --build
 ```
 
-(Leave this terminal running so you can monitor the live container logging structures).
+### Expected Output
+
+Keep this terminal running. You should see logs indicating:
+
+* Redis has started successfully
+* gRPC server is listening on port `50051`
+* FastAPI gateway is running on port `8000`
+* Internal service connections have been established
 
 ---
 
-## Step 2: Verify the API Gateway is Running Cleanly
+## Step 2: Launch the Traffic Simulator (Locust)
 
-Open a second, completely new terminal window in VS Code and run this command to check if the public entrance channel is active:
+Use Locust to generate high-volume traffic against the API gateway.
 
-#### Bash
+Open a second terminal window and run:
 
-```bash id="n8k2p4"
-curl -X GET http://localhost:8000/
+```bash
+locust -f load_tests/locustfile.py --host=http://localhost:8000
 ```
 
-### Expected Response:
+### Prerequisites
 
-#### JSON
+Ensure Locust is installed:
 
-```json id="k4m8s1"
-{"status": "healthy", "message": "API Gateway is active"}
+```bash
+pip install locust
 ```
+
+### Expected Output
+
+Locust will start a local web interface for configuring load tests.
 
 ---
 
-## Step 3: Test and Verify the Rate Limiter (The Evaluation)
+## Step 3: Execute the Load Test
 
-To simulate a user sending rapid requests and trigger a rate-limit block, copy and paste this command into your terminal and press Enter multiple times very quickly:
+Open your browser and navigate to:
 
-#### Bash
-
-```bash id="f2x7q9"
-curl -H "X-User-ID: user_123" http://localhost:8000/api/v1/protected
+```text
+http://localhost:8089
 ```
 
-### What you will see in the terminal:
+### Test Configuration
 
-#### First 5 Requests (Allowed):
+Configure the following parameters:
 
-The engine confirms tokens are available in Redis and returns:
+| Parameter       | Value                 |
+| --------------- | --------------------- |
+| Number of Users | 100                   |
+| Ramp-Up Rate    | 20 users/sec          |
+| Host            | http://localhost:8000 |
 
-```http id="z1v6r3"
-HTTP 200 OK -> {"status": "success", "message": "Request processed successfully"}
+### Start Testing
+
+Click the **START** button.
+
+### Monitoring
+
+Navigate between the following tabs:
+
+* Statistics
+* Charts
+* Failures
+
+You will observe thousands of requests being sent to:
+
+```text
+/api/v1/resource
 ```
+
+This simulates a realistic traffic surge against the distributed rate-limiting infrastructure.
 
 ---
 
-#### 6th Request Onward (Blocked & Throttled):
+## Step 4: Launch the Real-Time Dashboard
 
-Once you hit the limit inside the time window, your core engine drops the traffic instantly to protect the backend:
+Visualize how the rate-limiting algorithms react to incoming traffic.
 
-```http id="p5t9w2"
-HTTP 429 Too Many Requests -> {"error": "Rate limit exceeded. Please try again later."}
+Open a third terminal window and run:
+
+```bash
+python rate_limiter_dashboard/dashboard.py
 ```
+
+### Prerequisites
+
+Install the Rich library:
+
+```bash
+pip install rich
+```
+
+### Dashboard Features
+
+The live terminal dashboard displays:
+
+* Request throughput
+* Allowed requests
+* Rejected requests
+* Rate limiter decisions
+* Real-time system activity
+
+This provides an interactive view of how the distributed rate limiter behaves under load.
+
+---
+
+#  Workflow Summary
+
+1. Start all services with Docker Compose.
+2. Launch Locust traffic generation.
+3. Configure and start the load test from the Locust UI.
+4. Open the live dashboard.
+5. Observe how the rate limiter handles concurrent traffic in real time.
+
+🎉 You now have a complete end-to-end demonstration of the Distributed Rate Limiter system running locally.
+
